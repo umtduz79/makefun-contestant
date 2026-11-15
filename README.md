@@ -32,6 +32,10 @@ goes into the pump.fun create instruction, which is why the repository cannot pi
 | `contestant/launch-contestant.mjs` | The one script: preflight, dry run, and the real launch with `--yes`. |
 | `contestant/bounty-entry.md` | The written entry: pitch, condition-by-condition table, announcement tweet. |
 | `contestant/verify-entry.mjs` | Pre-submission audit of the whole package. |
+| `SUBMISSION.md` | The text that goes into the bounty form, in Turkish. |
+| `PROMO.md` | Three announcement drafts, one per voice, all holding until the coin is on chain. |
+| `APPLICATION-CHECKLIST.md` | Every bounty condition, what satisfies it, and how it was checked. |
+| `README.md` | This file. |
 
 ## How to run `main.ts`
 
@@ -103,6 +107,14 @@ After the launch, copy the mint and the signature into `LAUNCH.json`, then audit
 One local branch, no remote. The keypair that signs the launch is not in the tree: `git ls-files` lists no
 `*keypair*.json` and `.gitignore` covers `makefun-keypair.json`, `keypair.json`, `contestant/keypair.json` and
 `*.keypair.json`. Nothing in this repository has been pushed anywhere.
+
+If a remote is added later, push `main` only:
+
+    git push origin main
+
+The scratch branches under `refs/superbot/` are build worktrees, and one of their base commits
+(`dc19b70`, a sibling ref, not an ancestor of `main`) still carries an early `makefun-keypair.json`.
+`git push --all` or `git push --mirror` would publish that file, so use `origin main`.
 
 ## License
 
