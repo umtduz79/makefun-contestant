@@ -1,0 +1,22 @@
+# Node
+node_modules/
+
+# The wallet that signs the launch. Never commit a keypair.
+makefun-keypair.json
+keypair.json
+contestant/keypair.json
+*.keypair.json
+
+# Regenerated from the SVG by contestant/logo.mjs on every launch.
+contestant/logo.png
+
+# Written by a real launch: the mint and the create signature live in LAUNCH.json.
+contestant/launch-result.json
+
+# The bounty kit as downloaded, and scratch work.
+kit.tar.gz
+makefun-coin-promo-01-kit/
+.launchtest/
+.t.txt
+out/
+out-*/

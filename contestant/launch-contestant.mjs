@@ -16,6 +16,16 @@
  *   contestant/metadata.json  { name, symbol, description, website, twitter, image }
  *   contestant/logo.mjs       { LOGO_SVG_PATH, renderLogoPng() -> Buffer (PNG) }
  *
+ * Where the metadata uri comes from, in order:
+ *   --uri <url> (or $PUMP_METADATA_URI)  use this address, upload nothing
+ *   --pinata-jwt <jwt> (or $PINATA_JWT)  pin the logo and the metadata JSON to
+ *                                        IPFS through Pinata, the same service
+ *                                        pump.fun's own frontend pins through
+ *   otherwise                            POST to pump.fun /api/ipfs; that route
+ *                                        now answers a plain multipart POST with
+ *                                        400 "Invalid Server Action request",
+ *                                        so it is best effort only
+ *
  * Requires Node >= 22.18 (the bounty's runtime) and, for a real launch, the two
  * packages named in DEPS. A dry run needs neither of them.
  */
@@ -51,11 +61,14 @@ const USAGE = [
   'node contestant/launch-contestant.mjs [--yes] [options]',
   '',
   '  --yes                 gercekten launch et (yoksa on kontrol + komut basilir)',
+  '  --upload-only         yalnizca metadata yi IPFS e yukle, uri yi bas, zincire dokunma',
   '  --dry-run             acikca kuru calisma (varsayilan davranis)',
   '  --keypair <file>      Solana keypair (solana-keygen JSON); varsayilan: $SOLANA_KEYPAIR,',
   '                        contestant/keypair.json, makefun-keypair.json veya ~/.makefun/keypairs',
   '  --rpc <url>           Solana RPC; varsayilan $SOLANA_RPC_URL veya mainnet-beta',
-  '  --uri <url>           metadata JSON zaten bir adreste ise onu kullan (yukleme yapilmaz)',
+  '  --uri <url>           metadata JSON zaten bir adreste ise onu kullan (yukleme yapilmaz);',
+  '                        $PUMP_METADATA_URI de ayni isi gorur',
+  '  --pinata-jwt <jwt>    IPFS yuklemesi icin Pinata JWT; $PINATA_JWT de okunur',
   '  --min-sol <amount>    launch icin gereken en az SOL; varsayilan 0.035',
   '  --metadata <file>     varsayilan contestant/metadata.json',
   '  --logo <file>         varsayilan contestant/logo.mjs',
@@ -91,10 +104,12 @@ function pngHeader(buf) {
 function parseArgs(argv) {
   const opts = {
     yes: false,
+    uploadOnly: false,
     dryRun: false,
     help: false,
     keypair: null,
-    uri: null,
+    uri: process.env.PUMP_METADATA_URI || null,
+    pinataJwt: process.env.PINATA_JWT || null,
     rpc: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
     minSol: 0.035,
     metadata: path.join(HERE, 'metadata.json'),
@@ -116,6 +131,9 @@ function parseArgs(argv) {
       case '--dry-run':
         opts.dryRun = true;
         break;
+      case '--upload-only':
+        opts.uploadOnly = true;
+        break;
       case '--help':
       case '-h':
         opts.help = true;
@@ -128,6 +146,9 @@ function parseArgs(argv) {
         break;
       case '--uri':
         opts.uri = next();
+        break;
+      case '--pinata-jwt':
+        opts.pinataJwt = next();
         break;
       case '--min-sol': {
         const v = Number(next());
@@ -183,19 +204,19 @@ function checkNode(r) {
 }
 
 function findKeypairFile(explicit) {
-  if (explicit) return explicit;
-  if (process.env.SOLANA_KEYPAIR) return path.resolve(process.env.SOLANA_KEYPAIR);
+  if (explicit) return { file: explicit, source: 'explicit' };
+  if (process.env.SOLANA_KEYPAIR) return { file: path.resolve(process.env.SOLANA_KEYPAIR), source: 'env' };
   const local = path.join(HERE, 'keypair.json');
-  if (existsSync(local)) return local;
+  if (existsSync(local)) return { file: local, source: 'local' };
   const repo = path.join(ROOT, 'makefun-keypair.json');
-  if (existsSync(repo)) return repo;
+  if (existsSync(repo)) return { file: repo, source: 'repo' };
   const dir = path.join(os.homedir(), '.makefun', 'keypairs');
   if (existsSync(dir)) {
     try {
       const files = readdirSync(dir)
         .filter((f) => f.endsWith('.json'))
         .sort();
-      if (files.length) return path.join(dir, files[0]);
+      if (files.length) return { file: path.join(dir, files[0]), source: 'home' };
     } catch {
       /* keep looking */
     }
@@ -204,7 +225,8 @@ function findKeypairFile(explicit) {
 }
 
 async function checkWallet(r, opts) {
-  const file = findKeypairFile(opts.keypair);
+  const found = findKeypairFile(opts.keypair);
+  const file = found ? found.file : null;
   if (!file) {
     r.fail(
       'wallet',
@@ -238,6 +260,14 @@ async function checkWallet(r, opts) {
   }
   const address = base58(bytes.slice(32));
   r.ok('wallet', 'Cuzdan: ' + address, path.basename(file));
+  if (found.source === 'home') {
+    r.warn(
+      'wallet-source',
+      'Cuzdan ~/.makefun/keypairs icinden secildi',
+      file,
+      'Launch eden cuzdan make.fun hesabina bagli olmali; degilse --keypair <file> ile dogru dosyayi verin.',
+    );
+  }
   const mode = (await stat(file)).mode & 0o777;
   if (mode !== 0o600) {
     r.warn(
@@ -247,7 +277,7 @@ async function checkWallet(r, opts) {
       'chmod 600 ' + file,
     );
   }
-  return { file: file, address: address, bytes: bytes };
+  return { file: file, address: address, bytes: bytes, source: found.source };
 }
 
 async function fetchBalance(r, opts, wallet) {
@@ -535,22 +565,41 @@ function describeCommand(opts, wallet) {
   return 'node ' + relativeSelf() + ' --yes' + (wallet ? ' --keypair ' + wallet.file : '');
 }
 
-function describeCreate(meta, wallet) {
+function describeUploadPlan(opts) {
+  if (opts.uri) return { source: 'uri', label: 'hazir adres', detail: opts.uri };
+  if (opts.pinataJwt) {
+    return {
+      source: 'pinata',
+      label: 'Pinata (IPFS), iki adim',
+      detail: 'once logo, sonra metadata JSON pinlenir; create bu JSON adresini alir',
+    };
+  }
+  return {
+    source: 'pump',
+    label: 'pump.fun /api/ipfs',
+    detail: 'duz multipart POST; uc sunucu aksiyonuna cevrilmisse 400 donebilir',
+  };
+}
+
+function describeCreate(meta, wallet, opts) {
   const creator = wallet ? JSON.stringify(wallet.address) : '<cuzdan>';
+  const plan = describeUploadPlan(opts || {});
+  const uriLine =
+    plan.source === 'uri' ? '    uri: ' + JSON.stringify(plan.detail) + ',' : '    uri: <yuklenen metadata uri>,';
   return [
     'create cagrisi (pump.fun create_v2, SOL kotasyonu, ilk alim YOK):',
     '  PUMP_SDK.createV2Instruction({',
     '    mint: <yeni mint keypair>.publicKey,',
     '    name: ' + JSON.stringify((meta && meta.name) || '<metadata.name>') + ',',
     '    symbol: ' + JSON.stringify((meta && meta.symbol) || '<metadata.symbol>') + ',',
-    '    uri: <yuklenen metadata uri>,',
+    uriLine,
     '    creator: ' + creator + ',',
     '    user: ' + creator + ',',
     '    mayhemMode: false,',
     '  })',
     '  Transaction(feePayer = cuzdan, imzalar = mint + cuzdan) -> sendTransaction',
     '',
-    'metadata yuklemesi: POST https://pump.fun/api/ipfs (multipart: file, name, symbol, description, website, twitter)',
+    'metadata: ' + plan.detail,
   ].join('\n');
 }
 
@@ -579,8 +628,11 @@ function printReport(r, opts, meta, wallet) {
   console.log('Calistirilacak komut:');
   console.log('  ' + describeCommand(opts, wallet));
   console.log('');
-  console.log(describeCreate(meta, wallet));
+  console.log(describeCreate(meta, wallet, opts));
   if (!opts.yes) {
+    console.log('');
+    console.log('launch sonrasi LAUNCH.json (repo koku) iki degeri launch-result.json dan alir:');
+    console.log('  {"mint": "<mint>", "create_signature": "<create_signature>"}');
     console.log('');
     console.log('Kuru calisma bitti: coini gercekten acmak icin ayni komutu --yes ile calistirin.');
   }
@@ -588,10 +640,135 @@ function printReport(r, opts, meta, wallet) {
 
 // ---------------------------------------------------------------- launch
 
-async function uploadMetadata(meta, logo) {
-  const endpoints = ['https://pump.fun/api/ipfs', 'https://frontend-api.pump.fun/api/ipfs'];
-  const failures = [];
-  for (const url of endpoints) {
+const PUMP_ENDPOINTS = ['https://pump.fun/api/ipfs', 'https://frontend-api.pump.fun/api/ipfs'];
+const PINATA_V3 = 'https://uploads.pinata.cloud/v3/files';
+const PINATA_LEGACY = 'https://api.pinata.cloud/pinning/pinFileToIPFS';
+// Content pinned through Pinata is served by Pinata's public gateway for any
+// account, which is why the uri and the image both go through it. ipfs.io
+// rate-limits (429) far too readily to be the address a coin's metadata lives at,
+// and pump.mypinata.cloud is pump.fun's own dedicated gateway: it answers 403 for
+// a CID pinned by somebody else.
+const IPFS_GATEWAY = 'https://gateway.pinata.cloud/ipfs/';
+
+const BROWSER_HEADERS = {
+  accept: '*/*',
+  'accept-language': 'en-US,en;q=0.9',
+  origin: 'https://pump.fun',
+  referer: 'https://pump.fun/',
+  'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"macOS"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-origin',
+  'user-agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+};
+
+function uploadFailureMessage(failures) {
+  const nextServerAction = failures.some((line) => /Server Action/i.test(line));
+  const lines = ['metadata yuklenemedi:'];
+  for (const line of failures) lines.push('  ' + line);
+  lines.push('');
+  if (nextServerAction) {
+    lines.push('pump.fun /api/ipfs artik bir Next.js sunucu aksiyonu; duz multipart POST "Invalid Server Action" aliyor.');
+    lines.push('');
+  }
+  lines.push('Cozum (biri yeterli):');
+  lines.push('  1. PINATA_JWT=<jwt> node ' + relativeSelf() + ' --yes');
+  lines.push('     (pump.fun da kendi yuklemelerini Pinata ile yapiyor; ucretsiz hesap yeterli)');
+  lines.push('  2. metadata JSON u bir adreste ise: node ' + relativeSelf() + ' --yes --uri <url>');
+  lines.push('  3. gorsel + metadata yi elle pinleyip ayni --uri ile calistirin.');
+  return lines.join('\n');
+}
+
+/** Pin one file to IPFS through Pinata. Returns the CID. */
+async function pinataPin(bytes, filename, mime, jwt) {
+  const attempts = [];
+
+  // Pinata v3 upload API (current): answers { data: { cid } }.
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: mime }), filename);
+    form.append('network', 'public');
+    const res = await fetch(PINATA_V3, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + jwt },
+      body: form,
+    });
+    const text = await res.text();
+    if (res.ok) {
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* fall through to the failure line */
+      }
+      const cid = body?.data?.cid || body?.data?.IpfsHash || body?.IpfsHash;
+      if (cid) return cid;
+      attempts.push('v3 ' + filename + ' -> yanitta cid yok');
+    } else {
+      attempts.push('v3 ' + filename + ' -> HTTP ' + res.status + ' ' + text.slice(0, 160));
+    }
+  } catch (err) {
+    attempts.push('v3 ' + filename + ' -> ' + err.message);
+  }
+
+  // Legacy pinning API: answers { IpfsHash }.
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: mime }), filename);
+    form.append('pinataMetadata', JSON.stringify({ name: filename }));
+    const res = await fetch(PINATA_LEGACY, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + jwt },
+      body: form,
+    });
+    const text = await res.text();
+    if (res.ok) {
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* fall through to the failure line */
+      }
+      if (body?.IpfsHash) return body.IpfsHash;
+      attempts.push('legacy ' + filename + ' -> yanitta IpfsHash yok');
+    } else {
+      attempts.push('legacy ' + filename + ' -> HTTP ' + res.status + ' ' + text.slice(0, 160));
+    }
+  } catch (err) {
+    attempts.push('legacy ' + filename + ' -> ' + err.message);
+  }
+
+  throw new Error('Pinata yuklemesi basarisiz (' + filename + '):\n  ' + attempts.join('\n  '));
+}
+
+/**
+ * Image first, then the metadata JSON that points at it, the same two steps
+ * pump.fun's own frontend runs. Returns the metadata uri the create names.
+ */
+async function uploadViaPinata(meta, logo, jwt) {
+  const imageCid = await pinataPin(logo.bytes, logo.filename, logo.mime, jwt);
+  const imageUrl = IPFS_GATEWAY + imageCid;
+  const doc = {
+    name: meta.name,
+    symbol: meta.symbol,
+    description: meta.description,
+    image: imageUrl,
+    showName: true,
+    createdOn: 'https://pump.fun',
+  };
+  if (meta.website) doc.website = meta.website;
+  if (meta.twitter) doc.twitter = meta.twitter;
+  if (meta.telegram) doc.telegram = meta.telegram;
+  const json = Buffer.from(JSON.stringify(doc, null, 2), 'utf8');
+  const metaCid = await pinataPin(json, 'metadata.json', 'application/json', jwt);
+  return { uri: IPFS_GATEWAY + metaCid, endpoint: 'Pinata (IPFS)', image: imageUrl };
+}
+
+async function uploadViaPump(meta, logo, failures) {
+  for (const url of PUMP_ENDPOINTS) {
     const form = new FormData();
     form.append('name', meta.name);
     form.append('symbol', meta.symbol);
@@ -604,13 +781,7 @@ async function uploadMetadata(meta, logo) {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          accept: '*/*',
-          origin: 'https://pump.fun',
-          referer: 'https://pump.fun/',
-          'user-agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        },
+        headers: BROWSER_HEADERS,
         body: form,
       });
       const text = await res.text();
@@ -635,7 +806,28 @@ async function uploadMetadata(meta, logo) {
       failures.push(url + ' -> ' + err.message);
     }
   }
-  throw new Error('metadata yuklenemedi:\n  ' + failures.join('\n  '));
+  return null;
+}
+
+/**
+ * A metadata uri for the create, in order: the one given with --uri, then Pinata
+ * when a JWT is set, then pump.fun's own endpoints. A plain multipart POST to
+ * those now answers 400 "Invalid Server Action request", so they are best effort
+ * and every failure is carried into the error message.
+ */
+async function uploadMetadata(opts, meta, logo) {
+  if (opts.uri) return { uri: opts.uri, endpoint: '(verilen --uri)' };
+  const failures = [];
+  if (opts.pinataJwt) {
+    try {
+      return await uploadViaPinata(meta, logo, opts.pinataJwt);
+    } catch (err) {
+      failures.push('Pinata -> ' + String(err.message).replace(/\n/g, '\n  '));
+    }
+  }
+  const fromPump = await uploadViaPump(meta, logo, failures);
+  if (fromPump) return fromPump;
+  throw new Error(uploadFailureMessage(failures));
 }
 
 async function launch(opts, meta, logo, wallet) {
@@ -651,9 +843,7 @@ async function launch(opts, meta, logo, wallet) {
   await writeFile(logoPath, logo.bytes, { mode: 0o644 });
   console.log('logo yazildi: ' + logoPath);
 
-  const uploaded = opts.uri
-    ? { uri: opts.uri, endpoint: '(verilen --uri)' }
-    : await uploadMetadata(meta, logo);
+  const uploaded = await uploadMetadata(opts, meta, logo);
   console.log('metadata uri: ' + uploaded.uri + '  (' + uploaded.endpoint + ')');
 
   const instruction = await sdk.createV2Instruction({
@@ -728,18 +918,39 @@ async function main() {
   const meta = await checkMetadata(r, opts);
   const logo = await checkLogo(r, opts);
   checkDependencies(r);
-  if (!opts.uri) {
+  const plan = describeUploadPlan(opts);
+  if (plan.source === 'uri') {
+    r.ok('metadata-uri', 'metadata hazir: ' + plan.detail, 'yukleme atlanacak');
+  } else if (plan.source === 'pinata') {
+    r.ok('metadata-uri', 'metadata kaynagi: Pinata', 'gorsel + metadata JSON launch aninda IPFS e pinlenecek');
+  } else {
     r.warn(
       'metadata-uri',
-      'metadata uri verilmedi',
-      'Betik gorseli ve bilgileri pump.fun/api/ipfs adresine yuklemeyi deneyecek.',
-      'O uc reddederse metadata JSON adresini --uri <url> ile verin.',
+      'metadata kaynagi: pump.fun /api/ipfs',
+      'bu uc duz multipart POST a "Invalid Server Action request" donebilir.',
+      'PINATA_JWT=<jwt> ya da --uri <url> verin; ikisi de bu yolu atlar.',
     );
-  } else {
-    r.ok('metadata-uri', 'metadata uri: ' + opts.uri, 'yukleme atlanacak');
   }
 
   const blocking = r.blocking();
+  if (opts.uploadOnly) {
+    if (blocking.length || !meta || !logo) {
+      printReport(r, opts, meta, wallet);
+      console.error('');
+      console.error('Yukleme yapilmadi: ' + (blocking.length ? blocking.length + ' engel var.' : 'metadata ya da logo hazir degil.'));
+      process.exit(1);
+    }
+    try {
+      const uploaded = await uploadMetadata(opts, meta, logo);
+      console.log('metadata uri: ' + uploaded.uri + '  (' + uploaded.endpoint + ')');
+      console.log('');
+      console.log('Bu adresi launch a verin: node ' + relativeSelf() + ' --yes --uri ' + uploaded.uri);
+    } catch (err) {
+      console.error(err && err.message ? err.message : String(err));
+      process.exit(1);
+    }
+    return;
+  }
   if (!opts.yes) {
     printReport(r, opts, meta, wallet);
     return;
