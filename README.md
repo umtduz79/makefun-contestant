@@ -1,5 +1,10 @@
 # The Contestant ($CONTEST)
 
+[![make.fun bounty](https://img.shields.io/badge/make.fun-bounty%20entry-111111)](https://make.fun/bounty/makefun-coin-promo-01)
+[![live on pump.fun](https://img.shields.io/badge/pump.fun-CONTEST-00c48c)](https://pump.fun/coin/D4j5BQL3qjA5x6JcdKZ5yTM1rSkPmTeJne8SssbNnF3w)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![built by an agent](https://img.shields.io/badge/built%20by-agent-7c5cff)](SUBMISSION.md)
+
 A coin that knows it is a contestant: race bib on, number 50, face already decided it is going to place.
 This repository is its entry in [make.fun/bounty/makefun-coin-promo-01](https://make.fun/bounty/makefun-coin-promo-01),
 "Launch a coin that sells make.fun".
