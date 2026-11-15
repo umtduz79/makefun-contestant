@@ -17,7 +17,12 @@
  *   contestant/logo.mjs       { LOGO_SVG_PATH, renderLogoPng() -> Buffer (PNG) }
  *
  * Where the metadata uri comes from, in order:
- *   --uri <url> (or $PUMP_METADATA_URI)  use this address, upload nothing
+ *   --metadata-uri <url> / --uri <url>   (or $PUMP_METADATA_URI) use this address
+ *                                        and upload nothing at all, image included
+ *   --image-uri <url> (or $PUMP_IMAGE_URI)
+ *                                        the PNG is already pinned; keep the given
+ *                                        address as metadata.image and pin only the
+ *                                        metadata JSON, nothing else
  *   --pinata-jwt <jwt> (or $PINATA_JWT)  pin the logo and the metadata JSON to
  *                                        IPFS through Pinata, the same service
  *                                        pump.fun's own frontend pins through
@@ -25,6 +30,9 @@
  *                                        now answers a plain multipart POST with
  *                                        400 "Invalid Server Action request",
  *                                        so it is best effort only
+ *
+ * The PNG the metadata names is contestant/logo.png, rendered from the SVG by
+ * contestant/logo.mjs at 1024x1024 and kept under 5 MiB / 16 megapixels.
  *
  * Requires Node >= 22.18 (the bounty's runtime) and, for a real launch, the two
  * packages named in DEPS. A dry run needs neither of them.
@@ -40,7 +48,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const RESULT_PATH = path.join(HERE, 'launch-result.json');
-const LOGO_PNG_PATH = path.join(HERE, 'logo.png');
+// The image the metadata names, and the file the launcher writes next to it.
+const IMAGE_FILENAME = 'logo.png';
+const LOGO_PNG_PATH = path.join(HERE, IMAGE_FILENAME);
 
 const BOUNTY_URL = 'https://make.fun/bounty/makefun-coin-promo-01';
 const BOUNTY_ADDRESS = 'make.fun/bounty/makefun-coin-promo-01';
@@ -50,6 +60,10 @@ const INSTALL_CMD = 'npm install --no-save ' + DEPS;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 16000000;
 const MAX_DOSSIER_SIDE = 512;
+// The edge length the launch renders and uploads, and the one the metadata
+// claims. A 1024 PNG at this artwork's detail is about 1 MiB, well inside the
+// 5 MiB / 16 megapixel ceiling pump.fun applies.
+const LOGO_RENDER_SIDE = 1024;
 const MAX_NAME = 32;
 const MAX_SYMBOL = 10;
 const MAX_DESCRIPTION = 1000;
@@ -68,7 +82,11 @@ const USAGE = [
   '  --rpc <url>           Solana RPC; varsayilan $SOLANA_RPC_URL veya mainnet-beta',
   '  --uri <url>           metadata JSON zaten bir adreste ise onu kullan (yukleme yapilmaz);',
   '                        $PUMP_METADATA_URI de ayni isi gorur',
+  '  --metadata-uri <url>  --uri ile ayni sey; ikisi de yuklemeyi tamamen atlar',
+  '  --image-uri <url>     PNG zaten bir adreste ise onu metadata.image yap ve yalniz',
+  '                        metadata JSON u pinle; $PUMP_IMAGE_URI de okunur',
   '  --pinata-jwt <jwt>    IPFS yuklemesi icin Pinata JWT; $PINATA_JWT de okunur',
+  '  --offline             bakiye icin RPC ye hic gitme (kuru calismayi agsiz yapar)',
   '  --min-sol <amount>    launch icin gereken en az SOL; varsayilan 0.035',
   '  --metadata <file>     varsayilan contestant/metadata.json',
   '  --logo <file>         varsayilan contestant/logo.mjs',
@@ -108,8 +126,10 @@ function parseArgs(argv) {
     dryRun: false,
     help: false,
     keypair: null,
-    uri: process.env.PUMP_METADATA_URI || null,
+    uri: process.env.PUMP_METADATA_URI || process.env.MAKEFUN_METADATA_URI || null,
+    imageUri: process.env.PUMP_IMAGE_URI || process.env.MAKEFUN_IMAGE_URI || null,
     pinataJwt: process.env.PINATA_JWT || null,
+    offline: process.env.MAKEFUN_OFFLINE === '1',
     rpc: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
     minSol: 0.035,
     metadata: path.join(HERE, 'metadata.json'),
@@ -145,10 +165,17 @@ function parseArgs(argv) {
         opts.rpc = next();
         break;
       case '--uri':
+      case '--metadata-uri':
         opts.uri = next();
+        break;
+      case '--image-uri':
+        opts.imageUri = next();
         break;
       case '--pinata-jwt':
         opts.pinataJwt = next();
+        break;
+      case '--offline':
+        opts.offline = true;
         break;
       case '--min-sol': {
         const v = Number(next());
@@ -170,7 +197,23 @@ function parseArgs(argv) {
     }
   }
   if (opts.yes) opts.dryRun = false;
+  if (opts.uri) opts.uri = normalizeUri(opts.uri, '--metadata-uri');
+  if (opts.imageUri) opts.imageUri = normalizeUri(opts.imageUri, '--image-uri');
   return opts;
+}
+
+/** A pre-pinned address must be a real http(s) url, never a bare file name. */
+function normalizeUri(value, flag) {
+  let url = null;
+  try {
+    url = new URL(String(value).trim());
+  } catch {
+    url = null;
+  }
+  if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+    throw new Error(flag + ' tam bir http(s) adresi olmali, alinan: ' + value);
+  }
+  return url.href;
 }
 
 // ---------------------------------------------------------------- preflight
@@ -282,6 +325,15 @@ async function checkWallet(r, opts) {
 
 async function fetchBalance(r, opts, wallet) {
   if (!wallet) return null;
+  if (opts.offline) {
+    r.warn(
+      'balance',
+      'Bakiye okunmadi (--offline)',
+      'RPC ye hic gidilmedi, yani kuru calisma agsiz.',
+      'Gercek launch i --offline olmadan calistirin; bakiye esigi kontrol edilmez.',
+    );
+    return null;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
@@ -405,10 +457,36 @@ async function checkMetadata(r, opts) {
       r.warn('metadata-twitter', 'twitter ' + meta.twitter.length + ' karakter', null, 'Kisaltin.');
     }
   }
-  if (meta.image === undefined || meta.image === null) {
-    r.warn('metadata-image', 'metadata image alani yok', 'Bounty metadata image istiyor.', 'image alanini logonun dosya adina ayarlayin.');
-  } else if (typeof meta.image !== 'string' || !meta.image.trim()) {
-    r.warn('metadata-image', 'image gecerli dosya adi degil', null, 'image alanina logonun dosya adini yazin.');
+  // The metadata names the image the launch actually sends. The launch path
+  // renders and uploads contestant/logo.png (1024x1024, under 5 MiB / 16 MP), so
+  // a bare file name here must be that PNG: an .svg name is the mismatch this
+  // check exists to catch, because pump.fun does not take an SVG.
+  const imageRef = typeof meta.image === 'string' ? meta.image.trim() : '';
+  if (!imageRef) {
+    r.fail(
+      'metadata-image',
+      'metadata image alani yok',
+      'metadata image istiyor ve launch yolu PNG gonderiyor.',
+      'image alanini ' + IMAGE_FILENAME + ' yapin.',
+    );
+  } else if (/^https?:\/\//i.test(imageRef)) {
+    r.ok('metadata-image', 'image: ' + imageRef, 'hazir adres (--image-uri gecersen bu degisir)');
+  } else if (/\.svg$/i.test(imageRef)) {
+    r.fail(
+      'metadata-image',
+      'image SVG yi gosteriyor: ' + imageRef,
+      'Launch yolu 1024x1024 PNG gonderiyor; pump.fun SVG kabul etmez.',
+      'image alanini ' + IMAGE_FILENAME + ' yapin.',
+    );
+  } else if (imageRef !== IMAGE_FILENAME) {
+    r.warn(
+      'metadata-image',
+      'image ' + imageRef + ', launch ise ' + IMAGE_FILENAME,
+      'Metadata ile gonderilen dosya ayni seyi gostermeli.',
+      'image alanini ' + IMAGE_FILENAME + ' yapin.',
+    );
+  } else {
+    r.ok('metadata-image', 'image: ' + imageRef, '1024x1024 PNG');
   }
   const bad = r.blocking().some((c) => c.id.indexOf('metadata') === 0);
   if (bad) return meta;
@@ -444,7 +522,7 @@ async function checkLogo(r, opts) {
   const scratch = path.join(os.tmpdir(), 'contestant-logo-check-' + process.pid + '.png');
   let png = null;
   try {
-    const written = await mod.renderLogoPng(scratch, MAX_DOSSIER_SIDE);
+    const written = await mod.renderLogoPng(scratch, LOGO_RENDER_SIDE);
     if (Buffer.isBuffer(written) || written instanceof Uint8Array) png = Buffer.from(written);
     else if (typeof written === 'string' && existsSync(written)) png = await readFile(written);
     else if (existsSync(scratch)) png = await readFile(scratch);
@@ -492,16 +570,24 @@ async function checkLogo(r, opts) {
   if (pixels > MAX_IMAGE_PIXELS) {
     r.fail('logo-pixels', 'Logo ' + pixels + ' piksel', 'Sinir 16,000,000.', 'Boyutu dusurun.');
   }
-  if (Math.max(dims.width, dims.height) > MAX_DOSSIER_SIDE) {
-    r.warn(
-      'logo-side',
-      'Logo ' + dims.width + 'x' + dims.height,
-      'Hakem gorseli 512 piksele sigdiriyor.',
-      'Juri icin 512 px kenar onerilir (otomatik kucultulur).',
-    );
-  }
   const bad = r.blocking().some((c) => c.id.indexOf('logo') === 0);
   if (!bad) {
+    const side = Math.max(dims.width, dims.height);
+    const megabytes = (buf.length / 1048576).toFixed(2);
+    if (side > LOGO_RENDER_SIDE) {
+      r.warn(
+        'logo-side',
+        'Logo ' + dims.width + 'x' + dims.height,
+        'Launch ' + LOGO_RENDER_SIDE + ' px kenar bekliyor.',
+        'Boyutu ' + LOGO_RENDER_SIDE + ' px e dusurun.',
+      );
+    } else {
+      r.ok(
+        'logo-side',
+        'Logo ' + dims.width + 'x' + dims.height + ', ' + megabytes + ' MiB',
+        'sinir 5 MiB / 16 MP; hakem gorseli ' + MAX_DOSSIER_SIDE + ' px e sigdirir',
+      );
+    }
     r.ok('logo', 'Logo hazir: ' + dims.width + 'x' + dims.height + ', ' + Math.round(buf.length / 1024) + ' KB');
   }
   return { bytes: buf, mime: 'image/png', filename: 'logo.png', width: dims.width, height: dims.height };
@@ -562,30 +648,110 @@ function relativeSelf() {
 }
 
 function describeCommand(opts, wallet) {
-  return 'node ' + relativeSelf() + ' --yes' + (wallet ? ' --keypair ' + wallet.file : '');
+  return (
+    'node ' +
+    relativeSelf() +
+    ' --yes' +
+    (wallet ? ' --keypair ' + wallet.file : '') +
+    (opts.uri ? ' --metadata-uri ' + opts.uri : '') +
+    (opts.imageUri ? ' --image-uri ' + opts.imageUri : '')
+  );
 }
 
+/**
+ * Where the uri and the image come from. The order matches uploadMetadata():
+ * a pre-pinned metadata uri wins, then a pre-pinned image uri, then the two
+ * upload routes. `uri` is null when the launch still has to pin the JSON.
+ */
 function describeUploadPlan(opts) {
-  if (opts.uri) return { source: 'uri', label: 'hazir adres', detail: opts.uri };
+  opts = opts || {};
+  if (opts.uri) {
+    return {
+      source: 'metadata-uri',
+      label: 'hazir metadata adresi (hicbir yukleme yok)',
+      uri: opts.uri,
+      image: opts.imageUri || null,
+    };
+  }
+  if (opts.imageUri) {
+    return {
+      source: 'image-uri',
+      label: 'gorsel hazir; yalniz metadata JSON pinlenir',
+      uri: null,
+      image: opts.imageUri,
+    };
+  }
   if (opts.pinataJwt) {
     return {
       source: 'pinata',
       label: 'Pinata (IPFS), iki adim',
-      detail: 'once logo, sonra metadata JSON pinlenir; create bu JSON adresini alir',
+      uri: null,
+      image: null,
     };
   }
   return {
     source: 'pump',
     label: 'pump.fun /api/ipfs',
-    detail: 'duz multipart POST; uc sunucu aksiyonuna cevrilmisse 400 donebilir',
+    uri: null,
+    image: null,
   };
+}
+
+function isHttpsUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The cost of one create, and nothing else: no first buy, so no token is bought
+ * with the launcher's SOL. The two rent lines are Solana's rent-exempt minimum
+ * for the account sizes the create allocates (6960 lamports per byte); the last
+ * line is what the simulation measured on top of them.
+ */
+const CREATE_COST = {
+  measuredAt: '2026-11-15',
+  measuredOn: 'mainnet-beta simulateTransaction (create only, no first buy)',
+  lines: [
+    { label: 'mint hesabi kirasi (82 B)', sol: 0.0014616 },
+    { label: 'bonding curve token hesabi kirasi (165 B)', sol: 0.0020393 },
+    { label: 'bonding curve hesabi kirasi (~150 B)', sol: 0.0019349 },
+    { label: 'program hesaplari + islem ve oncelik ucreti', sol: 0.0039642 },
+  ],
+};
+
+function formatCost(opts) {
+  const total = CREATE_COST.lines.reduce((sum, line) => sum + line.sol, 0);
+  const rows = CREATE_COST.lines.map(
+    (line) => '  ' + line.label.padEnd(48) + line.sol.toFixed(7) + ' SOL',
+  );
+  rows.push('  ' + '-'.repeat(48) + ' ' + '-'.repeat(11));
+  rows.push(
+    '  ' + 'TOPLAM (ilk alim YOK)'.padEnd(48) + total.toFixed(7) + ' SOL',
+  );
+  return [
+    'maliyet:',
+    ...rows,
+    '  olcum: ' + CREATE_COST.measuredOn + ', ' + CREATE_COST.measuredAt,
+    '  esik (--min-sol): ' + Number(opts && opts.minSol).toFixed(3) + ' SOL; fazlasi cuzdanda kalir',
+    '  ag ve oncelik ucreti piyasayla oynar; kesin tutar launch aninda zincirden gelir.',
+  ].join('\n');
 }
 
 function describeCreate(meta, wallet, opts) {
   const creator = wallet ? JSON.stringify(wallet.address) : '<cuzdan>';
   const plan = describeUploadPlan(opts || {});
-  const uriLine =
-    plan.source === 'uri' ? '    uri: ' + JSON.stringify(plan.detail) + ',' : '    uri: <yuklenen metadata uri>,';
+  const uriLine = plan.uri
+    ? '    uri: ' + JSON.stringify(plan.uri) + ','
+    : '    uri: <yuklenen metadata uri>,';
+  const imageLine = plan.image
+    ? '    // metadata.image = ' + JSON.stringify(plan.image)
+    : '    // metadata.image = ' +
+      JSON.stringify((meta && meta.image) || IMAGE_FILENAME) +
+      ' (gorsel yuklenirken IPFS adresine cevrilir)';
   return [
     'create cagrisi (pump.fun create_v2, SOL kotasyonu, ilk alim YOK):',
     '  PUMP_SDK.createV2Instruction({',
@@ -599,7 +765,10 @@ function describeCreate(meta, wallet, opts) {
     '  })',
     '  Transaction(feePayer = cuzdan, imzalar = mint + cuzdan) -> sendTransaction',
     '',
-    'metadata: ' + plan.detail,
+    imageLine,
+    'metadata kaynagi: ' + plan.label + (plan.image || plan.uri ? '  ' + (plan.uri || plan.image) : ''),
+    '',
+    formatCost(opts),
   ].join('\n');
 }
 
@@ -677,8 +846,12 @@ function uploadFailureMessage(failures) {
   lines.push('Cozum (biri yeterli):');
   lines.push('  1. PINATA_JWT=<jwt> node ' + relativeSelf() + ' --yes');
   lines.push('     (pump.fun da kendi yuklemelerini Pinata ile yapiyor; ucretsiz hesap yeterli)');
-  lines.push('  2. metadata JSON u bir adreste ise: node ' + relativeSelf() + ' --yes --uri <url>');
-  lines.push('  3. gorsel + metadata yi elle pinleyip ayni --uri ile calistirin.');
+  lines.push('  2. gorsel + metadata JSON zaten bir adreste ise:');
+  lines.push(
+    '     node ' + relativeSelf() + ' --yes --image-uri <png-url> --metadata-uri <json-url>',
+  );
+  lines.push('     (--metadata-uri tek basina yeter: hicbir yukleme yapilmaz)');
+  lines.push('  3. ikisini elle pinleyip ayni --metadata-uri ile calistirin.');
   return lines.join('\n');
 }
 
@@ -744,13 +917,8 @@ async function pinataPin(bytes, filename, mime, jwt) {
   throw new Error('Pinata yuklemesi basarisiz (' + filename + '):\n  ' + attempts.join('\n  '));
 }
 
-/**
- * Image first, then the metadata JSON that points at it, the same two steps
- * pump.fun's own frontend runs. Returns the metadata uri the create names.
- */
-async function uploadViaPinata(meta, logo, jwt) {
-  const imageCid = await pinataPin(logo.bytes, logo.filename, logo.mime, jwt);
-  const imageUrl = IPFS_GATEWAY + imageCid;
+/** The JSON pump.fun reads at the uri: the repo metadata plus the live image url. */
+function buildMetadataDoc(meta, imageUrl) {
   const doc = {
     name: meta.name,
     symbol: meta.symbol,
@@ -762,6 +930,17 @@ async function uploadViaPinata(meta, logo, jwt) {
   if (meta.website) doc.website = meta.website;
   if (meta.twitter) doc.twitter = meta.twitter;
   if (meta.telegram) doc.telegram = meta.telegram;
+  return doc;
+}
+
+/**
+ * Image first, then the metadata JSON that points at it, the same two steps
+ * pump.fun's own frontend runs. Returns the metadata uri the create names.
+ */
+async function uploadViaPinata(meta, logo, jwt) {
+  const imageCid = await pinataPin(logo.bytes, logo.filename, logo.mime, jwt);
+  const imageUrl = IPFS_GATEWAY + imageCid;
+  const doc = buildMetadataDoc(meta, imageUrl);
   const json = Buffer.from(JSON.stringify(doc, null, 2), 'utf8');
   const metaCid = await pinataPin(json, 'metadata.json', 'application/json', jwt);
   return { uri: IPFS_GATEWAY + metaCid, endpoint: 'Pinata (IPFS)', image: imageUrl };
@@ -810,13 +989,41 @@ async function uploadViaPump(meta, logo, failures) {
 }
 
 /**
- * A metadata uri for the create, in order: the one given with --uri, then Pinata
- * when a JWT is set, then pump.fun's own endpoints. A plain multipart POST to
- * those now answers 400 "Invalid Server Action request", so they are best effort
- * and every failure is carried into the error message.
+ * A metadata uri for the create, in order: the pre-pinned metadata uri
+ * (--metadata-uri / --uri), then a pre-pinned image uri (--image-uri), where only
+ * the JSON is pinned and the image is left where it is, then Pinata for both,
+ * then pump.fun's own endpoints. The last route answers a plain multipart POST
+ * with 400 "Invalid Server Action request", so it is best effort and every
+ * failure is carried into the error message.
  */
 async function uploadMetadata(opts, meta, logo) {
-  if (opts.uri) return { uri: opts.uri, endpoint: '(verilen --uri)' };
+  if (opts.uri) {
+    return { uri: opts.uri, endpoint: '(verilen metadata adresi)', image: opts.imageUri || null };
+  }
+  if (opts.imageUri) {
+    const doc = buildMetadataDoc(meta, opts.imageUri);
+    const json = Buffer.from(JSON.stringify(doc, null, 2), 'utf8');
+    if (!opts.pinataJwt) {
+      throw new Error(
+        [
+          '--image-uri verildi, yani gorsel yerinde; ama metadata JSON u hala bir adrese konmali.',
+          'Biri yeterli:',
+          '  1. PINATA_JWT=<jwt> node ' + relativeSelf() + ' --yes --image-uri ' + opts.imageUri,
+          '  2. hazir JSON adresini verin: node ' + relativeSelf() + ' --yes --metadata-uri <url>',
+        ].join('\n'),
+      );
+    }
+    try {
+      const cid = await pinataPin(json, 'metadata.json', 'application/json', opts.pinataJwt);
+      return {
+        uri: IPFS_GATEWAY + cid,
+        endpoint: 'Pinata (IPFS, yalniz metadata JSON)',
+        image: opts.imageUri,
+      };
+    } catch (err) {
+      throw new Error('metadata JSON pinlenemedi:\n  ' + String(err.message).replace(/\n/g, '\n  '));
+    }
+  }
   const failures = [];
   if (opts.pinataJwt) {
     try {
@@ -839,7 +1046,7 @@ async function launch(opts, meta, logo, wallet) {
   const signer = web3.Keypair.fromSecretKey(wallet.bytes);
   const mint = web3.Keypair.generate();
 
-  const logoPath = path.join(HERE, logo.filename);
+  const logoPath = logo.filename === IMAGE_FILENAME ? LOGO_PNG_PATH : path.join(HERE, logo.filename);
   await writeFile(logoPath, logo.bytes, { mode: 0o644 });
   console.log('logo yazildi: ' + logoPath);
 
@@ -919,8 +1126,21 @@ async function main() {
   const logo = await checkLogo(r, opts);
   checkDependencies(r);
   const plan = describeUploadPlan(opts);
-  if (plan.source === 'uri') {
-    r.ok('metadata-uri', 'metadata hazir: ' + plan.detail, 'yukleme atlanacak');
+  if (plan.source === 'metadata-uri') {
+    r.ok('metadata-uri', 'metadata hazir: ' + plan.uri, 'hicbir yukleme yapilmayacak');
+    if (plan.image) {
+      r.ok('image-uri', 'gorsel hazir: ' + plan.image, 'metadata JSON u bu adresi gosteriyor');
+    }
+  } else if (plan.source === 'image-uri') {
+    r.ok('image-uri', 'gorsel hazir: ' + plan.image, 'yalniz metadata JSON pinlenecek');
+    if (!opts.pinataJwt) {
+      r.fail(
+        'metadata-uri',
+        'metadata JSON icin yukleme yolu yok',
+        '--image-uri verildi ama Pinata JWT yok.',
+        'PINATA_JWT=<jwt> verin ya da hazir JSON adresini --metadata-uri <url> ile gecin.',
+      );
+    }
   } else if (plan.source === 'pinata') {
     r.ok('metadata-uri', 'metadata kaynagi: Pinata', 'gorsel + metadata JSON launch aninda IPFS e pinlenecek');
   } else {
@@ -943,8 +1163,15 @@ async function main() {
     try {
       const uploaded = await uploadMetadata(opts, meta, logo);
       console.log('metadata uri: ' + uploaded.uri + '  (' + uploaded.endpoint + ')');
+      if (uploaded.image) console.log('gorsel uri:   ' + uploaded.image);
       console.log('');
-      console.log('Bu adresi launch a verin: node ' + relativeSelf() + ' --yes --uri ' + uploaded.uri);
+      console.log(
+        'Bu adresi launch a verin: node ' +
+          relativeSelf() +
+          ' --yes --metadata-uri ' +
+          uploaded.uri +
+          (uploaded.image ? ' --image-uri ' + uploaded.image : ''),
+      );
     } catch (err) {
       console.error(err && err.message ? err.message : String(err));
       process.exit(1);
@@ -955,7 +1182,7 @@ async function main() {
     printReport(r, opts, meta, wallet);
     return;
   }
-  if (blocking.length || !meta || !logo || !wallet || sol === null) {
+  if (blocking.length || !meta || !logo || !wallet || (sol === null && !opts.offline)) {
     printReport(r, opts, meta, wallet);
     console.error('');
     console.error(
