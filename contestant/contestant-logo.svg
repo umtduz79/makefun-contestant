@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="logoTitle logoDesc" shape-rendering="geometricPrecision">
+  <title id="logoTitle">The Contestant ($CONTEST)</title>
+  <desc id="logoDesc">A polished gold coin wearing a pinned white race bib numbered 50, smirking like it already knows it is a contestant. A faint leaderboard chart rises behind it.</desc>
+  <defs>
+    <radialGradient id="bgWash" cx="50%" cy="40%" r="72%">
+      <stop offset="0" stop-color="#243453"/>
+      <stop offset="0.55" stop-color="#111A2B"/>
+      <stop offset="1" stop-color="#070B12"/>
+    </radialGradient>
+    <radialGradient id="coinGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0.5" stop-color="#FFC24A" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#FFC24A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rimMetal" x1="0.1" y1="0.02" x2="0.88" y2="0.98">
+      <stop offset="0" stop-color="#FFFBE0"/>
+      <stop offset="0.14" stop-color="#F8D366"/>
+      <stop offset="0.36" stop-color="#D69A24"/>
+      <stop offset="0.54" stop-color="#8A5A0B"/>
+      <stop offset="0.72" stop-color="#F1C24E"/>
+      <stop offset="0.88" stop-color="#FFF3BC"/>
+      <stop offset="1" stop-color="#A56E17"/>
+    </linearGradient>
+    <linearGradient id="coreMetal" x1="0.22" y1="0" x2="0.78" y2="1">
+      <stop offset="0" stop-color="#FFEBA8"/>
+      <stop offset="0.28" stop-color="#EBBA46"/>
+      <stop offset="0.6" stop-color="#BE8017"/>
+      <stop offset="0.84" stop-color="#F7D67C"/>
+      <stop offset="1" stop-color="#CB9029"/>
+    </linearGradient>
+    <radialGradient id="coreSheen" cx="34%" cy="24%" r="62%">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="coreShade" cx="72%" cy="80%" r="64%">
+      <stop offset="0" stop-color="#2B1B02" stop-opacity="0.5"/>
+      <stop offset="0.6" stop-color="#2B1B02" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#2B1B02" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bibPaper" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.58" stop-color="#F7F5ED"/>
+      <stop offset="1" stop-color="#DCD7CA"/>
+    </linearGradient>
+    <linearGradient id="bibBand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F0603A"/>
+      <stop offset="1" stop-color="#D8431F"/>
+    </linearGradient>
+    <linearGradient id="pinMetal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBFDFF"/>
+      <stop offset="0.5" stop-color="#C9D3E0"/>
+      <stop offset="1" stop-color="#93A0B2"/>
+    </linearGradient>
+    <clipPath id="coreClip">
+      <circle cx="512" cy="480" r="300"/>
+    </clipPath>
+    <clipPath id="eyeLeftClip">
+      <path d="M356 360 Q404 312 452 360 Q404 394 356 360 Z"/>
+    </clipPath>
+    <clipPath id="eyeRightClip">
+      <path d="M572 360 Q620 312 668 360 Q620 394 572 360 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- plain background -->
+  <rect width="1024" height="1024" fill="url(#bgWash)"/>
+
+  <!-- faint leaderboard behind the coin -->
+  <g>
+    <line x1="24" y1="1000" x2="1000" y2="1000" stroke="#7FA6E0" stroke-width="6" stroke-opacity="0.14"/>
+    <g fill="#6E93CC" fill-opacity="0.16">
+      <rect x="24" y="966" width="46" height="34" rx="8"/>
+      <rect x="90" y="954" width="46" height="46" rx="8"/>
+      <rect x="156" y="944" width="46" height="56" rx="8"/>
+      <rect x="222" y="932" width="46" height="68" rx="8"/>
+      <rect x="288" y="922" width="46" height="78" rx="8"/>
+      <rect x="354" y="910" width="46" height="90" rx="8"/>
+      <rect x="420" y="898" width="46" height="102" rx="8"/>
+      <rect x="486" y="888" width="46" height="112" rx="8"/>
+      <rect x="552" y="876" width="46" height="124" rx="8"/>
+      <rect x="618" y="870" width="46" height="130" rx="8"/>
+      <rect x="684" y="858" width="46" height="142" rx="8"/>
+      <rect x="750" y="846" width="46" height="154" rx="8"/>
+      <rect x="816" y="836" width="46" height="164" rx="8"/>
+      <rect x="882" y="824" width="46" height="176" rx="8"/>
+    </g>
+    <polyline points="47,966 113,954 179,944 245,932 311,922 377,910 443,898 509,888 575,876 641,870 707,858 773,846 839,836 905,824"
+      fill="none" stroke="#9CC0F0" stroke-width="8" stroke-opacity="0.22" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- glow -->
+  <circle cx="512" cy="470" r="430" fill="url(#coinGlow)"/>
+
+  <!-- the coin -->
+  <g>
+    <circle cx="512" cy="480" r="350" fill="url(#rimMetal)" stroke="#12100A" stroke-width="18"/>
+    <circle cx="512" cy="480" r="318" fill="none" stroke="#12100A" stroke-width="14" stroke-opacity="0.14"
+      stroke-dasharray="5 22" stroke-linecap="round"/>
+    <circle cx="512" cy="480" r="300" fill="url(#coreMetal)" stroke="#12100A" stroke-width="12"/>
+    <g clip-path="url(#coreClip)">
+      <circle cx="512" cy="480" r="300" fill="url(#coreSheen)"/>
+      <circle cx="512" cy="480" r="300" fill="url(#coreShade)"/>
+      <path d="M212 404 A300 300 0 0 1 700 214" fill="none" stroke="#FFF8DC" stroke-width="16" stroke-opacity="0.4" stroke-linecap="round"/>
+      <path d="M760 640 A300 300 0 0 1 330 772" fill="none" stroke="#3A2503" stroke-width="14" stroke-opacity="0.22" stroke-linecap="round"/>
+    </g>
+    <circle cx="512" cy="480" r="300" fill="none" stroke="#FFF3C6" stroke-width="5" stroke-opacity="0.45"/>
+  </g>
+
+  <!-- face: one brow up, half-lidded eyes, a smirk -->
+  <g>
+    <path d="M356 360 Q404 312 452 360 Q404 394 356 360 Z" fill="#FFFCF0" stroke="#12100A" stroke-width="10" stroke-linejoin="round"/>
+    <g clip-path="url(#eyeLeftClip)">
+      <circle cx="408" cy="358" r="21" fill="#2C2014"/>
+      <circle cx="408" cy="358" r="11" fill="#0A0703"/>
+      <circle cx="401" cy="350" r="6.5" fill="#FFFFFF"/>
+    </g>
+    <path d="M572 360 Q620 312 668 360 Q620 394 572 360 Z" fill="#FFFCF0" stroke="#12100A" stroke-width="10" stroke-linejoin="round"/>
+    <g clip-path="url(#eyeRightClip)">
+      <circle cx="624" cy="358" r="21" fill="#2C2014"/>
+      <circle cx="624" cy="358" r="11" fill="#0A0703"/>
+      <circle cx="617" cy="350" r="6.5" fill="#FFFFFF"/>
+    </g>
+    <path d="M352 300 Q400 278 448 288" fill="none" stroke="#12100A" stroke-width="22" stroke-linecap="round"/>
+    <path d="M576 270 Q624 252 672 266" fill="none" stroke="#12100A" stroke-width="22" stroke-linecap="round"/>
+    <path d="M428 462 C470 494 552 494 616 448" fill="none" stroke="#12100A" stroke-width="18" stroke-linecap="round"/>
+    <path d="M622 432 Q634 446 628 464" fill="none" stroke="#12100A" stroke-width="9" stroke-opacity="0.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- race bib, pinned on the chest -->
+  <g transform="rotate(-2 512 645)">
+    <rect x="387" y="548" width="250" height="210" rx="18" fill="#2B1B02" fill-opacity="0.22"/>
+    <rect x="387" y="540" width="250" height="210" rx="18" fill="url(#bibPaper)" stroke="#12100A" stroke-width="12"/>
+    <rect x="387" y="540" width="250" height="46" rx="18" fill="url(#bibBand)"/>
+    <rect x="387" y="566" width="250" height="20" fill="url(#bibBand)"/>
+    <g fill="#FFFFFF" fill-opacity="0.9">
+      <rect x="401" y="556" width="44" height="10" rx="5"/>
+      <rect x="455" y="556" width="22" height="10" rx="5"/>
+    </g>
+    <g fill="none" stroke="#16110A" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+      <path transform="translate(408 596) scale(0.96)" d="M82 14 L30 14 L26 62 C44 54 64 54 78 64 C96 78 98 102 84 118 C70 134 42 134 26 118"/>
+      <ellipse transform="translate(520 596) scale(0.96)" cx="52" cy="74" rx="31" ry="57"/>
+    </g>
+    <g>
+      <g transform="translate(393 552) rotate(-20)">
+        <rect x="-18" y="-6" width="34" height="12" rx="6" fill="url(#pinMetal)" stroke="#12100A" stroke-width="5"/>
+        <circle cx="18" cy="0" r="7.5" fill="none" stroke="#12100A" stroke-width="5"/>
+      </g>
+      <g transform="translate(631 552) rotate(20)">
+        <rect x="-14" y="-6" width="34" height="12" rx="6" fill="url(#pinMetal)" stroke="#12100A" stroke-width="5"/>
+        <circle cx="-18" cy="0" r="7.5" fill="none" stroke="#12100A" stroke-width="5"/>
+      </g>
+    </g>
+  </g>
+</svg>
