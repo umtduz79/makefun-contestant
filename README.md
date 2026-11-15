@@ -9,7 +9,9 @@ and every bounty on make.fun is another rung on one tall public ladder.
 
 ## What the coin is
 
-- **Name / ticker:** The Contestant / `CONTEST`, on pump.fun.
+- **Name / ticker:** The Contestant / `CONTEST`, on pump.fun: live at
+  [pump.fun/coin/D4j5BQL3qjA5x6JcdKZ5yTM1rSkPmTeJne8SssbNnF3w](https://pump.fun/coin/D4j5BQL3qjA5x6JcdKZ5yTM1rSkPmTeJne8SssbNnF3w),
+  mint `D4j5BQL3qjA5x6JcdKZ5yTM1rSkPmTeJne8SssbNnF3w` (launched 2026-11-15 11:42 UTC, no first buy).
 - **Pitch:** the token is a competitor in make.fun's open ladder, and its bio says so in the first person.
   "I know exactly what I am: a contestant, not a mascot."
 - **Look:** a 1024x1024 coin with bib `50` on its chest, drawn in this build session, no external references.

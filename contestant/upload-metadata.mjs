@@ -26,7 +26,9 @@
  * The gateway is not assumed: each pinned CID is probed against the gateways in
  * order and the first one that serves the bytes is the one written into the
  * metadata. Nothing is printed as a success until the metadata URI is fetched
- * back, parsed, and compared byte for byte with what was uploaded.
+ * back, parsed, and compared byte for byte with what was uploaded. After that,
+ * every gateway is probed once more and the count that served the CID is
+ * printed, because one host means the bytes leave with that host.
  *
  * metadata.json is read, never written: the uploaded document is built in memory
  * from its fields, with `image` replaced by the pinned PNG's address.
@@ -290,6 +292,31 @@ async function chooseGateway(cid, expectedSha, attempts, what) {
   return null;
 }
 
+/**
+ * How many independent gateways serve a pinned CID: one host means the bytes
+ * sit on a single node and leave with it, more than one means the content has
+ * reached the wider network. Informational only, it never fails the run.
+ */
+async function countGateways(cid, expectedSha) {
+  const served = [];
+  await Promise.all(
+    GATEWAYS.map(async (gateway) => {
+      try {
+        const res = await fetch(gateway + cid, {
+          headers: BROWSER_HEADERS,
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return;
+        const body = Buffer.from(await res.arrayBuffer());
+        if (sha256(body) === expectedSha) served.push(new URL(gateway).host);
+      } catch {
+        // a gateway that times out simply does not count
+      }
+    })
+  );
+  return served.sort();
+}
+
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -408,10 +435,21 @@ async function main() {
   }
 
   // stdout carries the two addresses and nothing else, so a caller can read them.
+  const imageHosts = await countGateways(imagePin.cid, sha256(imageBytes));
+  const metaHosts = await countGateways(metaPin.cid, sha256(json));
+
   console.log('image uri: ' + imageUri);
   console.log('metadata uri: ' + metadataUri);
   console.error('');
   console.error('dogrulandi: metadata URI geri cekildi, JSON ayni, image alani ' + imageUri);
+  console.error('gateway: gorsel ' + imageHosts.length + '/' + GATEWAYS.length + ' (' + (imageHosts.join(', ') || 'hicbiri') + ')');
+  console.error('gateway: metadata ' + metaHosts.length + '/' + GATEWAYS.length + ' (' + (metaHosts.join(', ') || 'hicbiri') + ')');
+  if (!process.env.PINATA_JWT) {
+    console.error('');
+    console.error('not: PINATA_JWT verilmedi, iki dosya The Graph in IPFS dugumune pinlendi.');
+    console.error('     The Graph bir pinning servisi degil; launch tan hemen once bu betigi');
+    console.error('     tekrar calistirin ki CID ler taze olsun. Kalici yol: PINATA_JWT.');
+  }
   console.error('metadata.json degistirilmedi. Launch: node contestant/launch-contestant.mjs --yes --uri ' + metadataUri);
 }
 
